@@ -1,0 +1,96 @@
+import streamlit as st
+import tensorflow as tf
+import pickle
+import numpy as np
+import re
+import string
+from tensorflow.keras.preprocessing.sequence import pad_sequences
+from Sastrawi.StopWordRemover.StopWordRemoverFactory import StopWordRemoverFactory
+
+# --- 1. INISIALISASI SASTRAWI & DATA ---
+factory = StopWordRemoverFactory()
+stopword_list = factory.get_stop_words()
+
+norm_dict = {
+    'yg': 'yang', 'gk': 'tidak', 'gak': 'tidak', 'udh': 'sudah',
+    'kpu': 'komisi pemilihan umum', 'psu': 'pemilihan suara ulang'
+}
+
+# --- 2. FUNGSI PREPROCESSING (Sesuai Colab Kamu) ---
+def preprocess_data(text):
+    # a. Cleansing
+    text = re.sub(r'https?://\S+|www\.\S+', '', text)
+    text = re.sub(r'@\w+', '', text)
+    text = re.sub(r'#\w+', '', text)
+    text = re.sub(r'\d+', '', text)
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    text = text.strip()
+    
+    # b. Case Folding
+    text = text.lower()
+    
+    # c. Tokenize
+    tokens = text.split()
+    
+    # d. Normalization
+    tokens = [norm_dict[token] if token in norm_dict else token for token in tokens]
+    
+    # e. Stopwords Removal
+    tokens = [token for token in tokens if token not in stopword_list]
+    
+    return " ".join(tokens)
+
+# --- 3. LOAD MODEL & TOKENIZER ---
+@st.cache_resource
+def load_assets():
+    # Pastikan file ini SUDAH di-rename (hapus .py di belakangnya)
+    model = tf.keras.models.load_model('model_psu_cnn.h5')
+    with open('tokenizer.pickle', 'rb') as f:
+        tokenizer = pickle.load(f)
+    return model, tokenizer
+
+# Coba muat model
+try:
+    model, tokenizer = load_assets()
+except Exception as e:
+    st.error(f"Error Loading Assets: {e}")
+    st.stop()
+
+# --- 4. UI STREAMLIT ---
+st.set_page_config(page_title="Analisis Sentimen PSU", layout="wide")
+st.title("📊 Penerapan CNN untuk Sentimen PSU")
+
+input_text = st.text_area("Masukkan Tweet/Opini:", height=150)
+
+if st.button("Analisis Sentimen"):
+    if input_text:
+        # Jalankan Preprocessing
+        cleaned_text = preprocess_data(input_text)
+        
+        # Transformasi ke sekuens angka
+        seq = tokenizer.texts_to_sequences([cleaned_text])
+        
+        # Padding (Gunakan maxlen=100 atau sesuaikan hasil print di Colab)
+        padded = pad_sequences(seq, maxlen=100, padding='post')
+        
+        # Prediksi
+        prediction = model.predict(padded)
+        result_index = np.argmax(prediction, axis=1)[0]
+        
+        # Label Mapping (Sesuai mapping Colab kamu)
+        labels = {0: 'Negatif', 1: 'Netral', 2: 'Positif'}
+        sentiment = labels[result_index]
+        confidence = np.max(prediction) * 100
+        
+        # Tampilkan Hasil
+        st.subheader(f"Hasil: Sentimen **{sentiment}**")
+        st.write(f"Tingkat Keyakinan: {confidence:.2f}%")
+        
+        if sentiment == 'Positif':
+            st.success("Opini ini mendukung PSU.")
+        elif sentiment == 'Negatif':
+            st.error("Opini ini menolak PSU.")
+        else:
+            st.info("Opini ini bersifat netral.")
+    else:
+        st.warning("Masukkan teks terlebih dahulu.")
